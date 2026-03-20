@@ -24,10 +24,10 @@ storage_client = storage.Client()
 RUN_ID_ISO_RE   = re.compile(r"^\d{8}T\d{6}Z$")  # 20251026T170002Z
 RUN_ID_PLAIN_RE = re.compile(r"^\d{14}$")        # 20251026170002
 
-# Stable CSV schema for students
+# Stable CSV schema (include new fields emitted by extractor-per-listing-v2)
 CSV_COLUMNS = [
     "post_id", "run_id", "scraped_at",
-    "price", "year", "make", "model", "mileage",
+    "price", "year", "make", "model", "transmission", "cylinders", "mileage",
     "source_txt"
 ]
 
