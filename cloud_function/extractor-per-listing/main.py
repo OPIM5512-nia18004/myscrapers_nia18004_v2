@@ -38,10 +38,7 @@ storage_client = storage.Client()
 # -------------------- SIMPLE REGEX EXTRACTORS --------------------
 PRICE_RE      = re.compile(r"\$\s?([0-9,]+)")
 YEAR_RE       = re.compile(r"\b(19|20)\d{2}\b")
-MAKE_MODEL_RE = re.compile(r"\b(?:19|20)\d{2}\s+([A-Z0-9][A-Za-z0-9\-\s]{2,30})", re.I)
-TRANS_RE = re.compile(r"\b(automatic|manual)\b", re.I)
-CYLINDER_RE = re.compile(r"(\d)\s?cyl(?:inder)?", re.I)
-
+MAKE_MODEL_RE = re.compile(r"\b([A-Z][a-z]+)\s+([A-Z][A-Za-z0-9]+)")
 
 # -------------------- HELPERS --------------------
 def _list_run_ids(bucket: str, scrapes_prefix: str) -> list[str]:
@@ -132,14 +129,6 @@ def parse_listing(text: str) -> dict:
     if mm:
         d["make"] = mm.group(1)
         d["model"] = mm.group(2)
-
-    t = TRANS_RE.search(text)
-    if t:
-        d["transmission"] = t.group(1).lower()
-
-    c = CYLINDER_RE.search(text)
-    if c:
-        d["cylinders"] = int(c.group(1))
 
     # mileage variants
     mi = None
