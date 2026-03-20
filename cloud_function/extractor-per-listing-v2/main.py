@@ -129,8 +129,18 @@ def parse_listing(text: str) -> dict:
 
     mm = MAKE_MODEL_RE.search(text)
     if mm:
-        d["make"] = mm.group(1)
-        d["model"] = mm.group(2)
+        # Support both older regex (two capture groups: make, model)
+        # and newer single-capture patterns where the group may contain both.
+        if mm.lastindex and mm.lastindex >= 2:
+            d["make"] = mm.group(1)
+            d["model"] = mm.group(2)
+        else:
+            # mm.group(1) may contain "Make Model" together; try splitting on first space
+            val = mm.group(1).strip()
+            parts = val.split(None, 1)
+            d["make"] = parts[0]
+            if len(parts) > 1:
+                d["model"] = parts[1]
 
 
     t = TRANS_RE.search(text)
