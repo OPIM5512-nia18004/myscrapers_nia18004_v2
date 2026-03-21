@@ -38,7 +38,7 @@ storage_client = storage.Client()
 # -------------------- SIMPLE REGEX EXTRACTORS --------------------
 PRICE_RE      = re.compile(r"\$\s?([0-9,]+)")
 YEAR_RE       = re.compile(r"\b(19|20)\d{2}\b")
-MAKE_MODEL_RE = re.compile(r"\b([A-Z][a-z]+)\s+([A-Z][A-Za-z0-9]+)")
+MAKE_MODEL_RE = re.compile(r"\b(?:19|20)\d{2}\s+([A-Z0-9][A-Za-z0-9\-\s]{2,30})", re.I)
 TRANS_RE = re.compile(r"\b(automatic|manual)\b", re.I)
 CYLINDER_RE = re.compile(r"(\d)\s?cyl(?:inder)?", re.I)
 
@@ -129,8 +129,16 @@ def parse_listing(text: str) -> dict:
 
     mm = MAKE_MODEL_RE.search(text)
     if mm:
-        d["make"] = mm.group(1)
-        d["model"] = mm.group(2)
+        if mm.lastindex and mm.lastindex >= 2:
+            d["make"] = mm.group(1)
+            d["model"] = mm.group(2)
+        else:
+            # mm.group(1) may contain "Make Model" together; try splitting on first space
+            val = mm.group(1).strip()
+            parts = val.split(None, 1)
+            d["make"] = parts[0]
+            if len(parts) > 1:
+                d["model"] = parts[1]
 
 
     t = TRANS_RE.search(text)
