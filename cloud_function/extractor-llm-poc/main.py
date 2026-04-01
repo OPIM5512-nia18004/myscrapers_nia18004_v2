@@ -1,7 +1,7 @@
 # main.py
 # Purpose: PoC LLM extractor that reads your existing per-listing JSONL records,
 # fetches the original TXT, asks an LLM (Vertex AI) to extract fields, and writes
-# a sibling "<post_id>_llm.jsonl" to the NEW 'jsonl_llm/' sub-directory.
+# a sibling "<post_id>_llm.jsonl" to the `structured-v2/.../jsonl_llm/` sub-directory.
 #
 # FINAL FIXES INCLUDED:
 # 1. Schema updated to use "type": "string" + "nullable": True.
@@ -31,7 +31,7 @@ from google.api_core.exceptions import ResourceExhausted, InternalServerError, A
 PROJECT_ID           = os.getenv("PROJECT_ID", "")
 REGION               = os.getenv("REGION", "us-central1")
 BUCKET_NAME          = os.getenv("GCS_BUCKET", "")
-STRUCTURED_PREFIX    = os.getenv("STRUCTURED_PREFIX", "structured")
+STRUCTURED_PREFIX    = os.getenv("STRUCTURED_PREFIX", "structured-v2")
 LLM_PROVIDER         = os.getenv("LLM_PROVIDER", "vertex").lower()
 LLM_MODEL            = os.getenv("LLM_MODEL", "gemini-2.5-flash")
 OVERWRITE_DEFAULT    = os.getenv("OVERWRITE", "false").lower() == "true"
@@ -79,7 +79,7 @@ def _get_vertex_model() -> GenerativeModel:
 
 def _list_structured_run_ids(bucket: str, structured_prefix: str) -> list[str]:
     """
-    List 'structured/run_id=*/' directories and return normalized run_ids.
+    List 'structured-v2/run_id=*/' directories and return normalized run_ids.
     """
     it = storage_client.list_blobs(bucket, prefix=f"{structured_prefix}/", delimiter="/")
     for _ in it:
@@ -124,6 +124,10 @@ def _list_per_listing_jsonl_for_run(bucket: str, run_id: str) -> list[str]:
             continue
         names.append(b.name)
     return names
+
+
+def _llm_output_key(run_id: str, post_id: str) -> str:
+    return f"{STRUCTURED_PREFIX}/run_id={run_id}/jsonl_llm/{post_id}_llm.jsonl"
 
 
 def _download_text(blob_name: str) -> str:
@@ -296,9 +300,7 @@ def llm_extract_http(request: Request):
             if not source_txt_key:
                 raise ValueError("missing source_txt in input record")
 
-            # Output path: uses 'jsonl_llm/' folder
-            out_prefix = in_key.rsplit("/", 2)[0] + "/jsonl_llm"
-            out_key = out_prefix + f"/{post_id}_llm.jsonl"
+            out_key = _llm_output_key(run_id, post_id)
 
             if not overwrite and _blob_exists(out_key):
                 skipped += 1

@@ -28,7 +28,7 @@ env:
   LLM_MODEL: ${{ vars.LLM_MODEL || 'gemini-2.5-flash' }} # <-- CHANGE HERE
   LLM_OVERWRITE: ${{ vars.LLM_OVERWRITE || 'false' }}
   LLM_MAX_FILES: ${{ vars.LLM_MAX_FILES || '0' }}
-  LLM_STRUCTURED_PREFIX: ${{ vars.STRUCTURED_PREFIX || 'structured' }}
+  LLM_STRUCTURED_PREFIX: ${{ vars.LLM_STRUCTURED_PREFIX || vars.STRUCTURED_PREFIX || 'structured-v2' }}
   SCHEDULE_BODY: ${{ vars.EXTRACTOR_LLM_BODY || '{"overwrite":false,"max_files":0}' }}
   CRON_EXPR: "12 * * * *"
 

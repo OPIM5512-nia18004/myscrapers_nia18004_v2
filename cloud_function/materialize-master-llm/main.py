@@ -1,7 +1,7 @@
 # main.py
-# Build a single, ever-growing CSV from all structured JSONL files.
-# Reads:  gs://<bucket>/<STRUCTURED_PREFIX>/run_id=*/jsonl/*.jsonl
-# Writes: gs://<bucket>/<STRUCTURED_PREFIX>/datasets/listings_master.csv  (atomic publish)
+# Build a single, ever-growing CSV from all structured-v2 LLM JSONL files.
+# Reads:  gs://<bucket>/<STRUCTURED_PREFIX>/run_id=*/jsonl_llm/*.jsonl
+# Writes: gs://<bucket>/<STRUCTURED_PREFIX>/datasets/listings_master_llm.csv
 
 import csv
 import io
@@ -15,8 +15,8 @@ from flask import Request, jsonify
 from google.cloud import storage
 
 # -------------------- ENV --------------------
-BUCKET_NAME        = os.getenv("GCS_BUCKET")                      # REQUIRED
-STRUCTURED_PREFIX  = os.getenv("STRUCTURED_PREFIX", "structured") # e.g., "structured"
+BUCKET_NAME        = os.getenv("GCS_BUCKET")                         # REQUIRED
+STRUCTURED_PREFIX  = os.getenv("STRUCTURED_PREFIX", "structured-v2") # e.g., "structured-v2"
 
 storage_client = storage.Client()
 
@@ -45,7 +45,7 @@ def _list_run_ids(bucket: str, structured_prefix: str) -> list[str]:
     return sorted(run_ids)
 
 def _jsonl_records_for_run(bucket: str, structured_prefix: str, run_id: str):
-    """Yield dict records from .jsonl under .../run_id=<run_id>/jsonl/ (one JSON per file)."""
+    """Yield dict records from .jsonl under .../run_id=<run_id>/jsonl_llm/."""
     b = storage_client.bucket(bucket)
     prefix = f"{structured_prefix}/run_id={run_id}/jsonl_llm/"
     for blob in b.list_blobs(prefix=prefix):
@@ -93,8 +93,8 @@ def _write_csv(records: Iterable[Dict], dest_key: str, columns=CSV_COLUMNS) -> i
 def materialize_http(request: Request):
     """
     HTTP POST (no body needed).
-    Crawls ALL structured run folders, de-dupes by post_id (keep newest run),
-    and writes one CSV directly to .../datasets/listings_master.csv.
+    Crawls ALL structured-v2 run folders, de-dupes by post_id (keep newest run),
+    and writes one CSV directly to .../datasets/listings_master_llm.csv.
     Returns JSON with counts and output path.
     """
     try:
