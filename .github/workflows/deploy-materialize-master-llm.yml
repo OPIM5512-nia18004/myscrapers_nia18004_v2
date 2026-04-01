@@ -27,7 +27,7 @@ env:
   DEPLOYER_SA: ${{ vars.DEPLOYER_SA }}
   WORKLOAD_IDENTITY_PROVIDER: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
   SCHEDULE_BODY: ${{ vars.MATERIALIZE_BODY || '{}' }}
-  CRON_EXPR: "25 * * * *"   # :25 each hour
+  CRON_EXPR: "45 * * * *"   # :45 each hour
 
 jobs:
   deploy:
