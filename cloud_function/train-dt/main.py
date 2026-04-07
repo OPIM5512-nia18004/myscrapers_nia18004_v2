@@ -15,7 +15,7 @@ from sklearn.metrics import mean_absolute_error
 # ---- ENV ----
 PROJECT_ID     = os.getenv("PROJECT_ID", "")
 GCS_BUCKET     = os.getenv("GCS_BUCKET", "")
-DATA_KEY       = os.getenv("DATA_KEY", "structured/datasets/listings_master.csv")
+DATA_KEY       = os.getenv("DATA_KEY", "structured-v2/datasets/listings_master.csv")
 OUTPUT_PREFIX  = os.getenv("OUTPUT_PREFIX", "preds")            # e.g., "structured/preds"
 TIMEZONE       = os.getenv("TIMEZONE", "America/New_York")      # split by local day
 LOG_LEVEL      = os.getenv("LOG_LEVEL", "INFO")

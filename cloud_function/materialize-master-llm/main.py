@@ -1,10 +1,12 @@
 # main.py
-# Build a single, ever-growing CSV from all structured-v2 LLM JSONL files.
-# Reads:  gs://<bucket>/<STRUCTURED_PREFIX>/run_id=*/jsonl_llm/*.jsonl
-# Writes: gs://<bucket>/<STRUCTURED_PREFIX>/datasets/listings_master_llm.csv
+# Build ONE combined CSV from regex JSONL + LLM JSONL files.
+# Reads:
+#   gs://<bucket>/<STRUCTURED_PREFIX>/run_id=*/jsonl/*.jsonl
+#   gs://<bucket>/<STRUCTURED_PREFIX>/run_id=*/jsonl_llm/*.jsonl
+# Writes:
+#   gs://<bucket>/<STRUCTURED_PREFIX>/datasets/listings_master.csv
 
 import csv
-import io
 import json
 import os
 import re
@@ -17,6 +19,7 @@ from google.cloud import storage
 # -------------------- ENV --------------------
 BUCKET_NAME        = os.getenv("GCS_BUCKET")                         # REQUIRED
 STRUCTURED_PREFIX  = os.getenv("STRUCTURED_PREFIX", "structured-v2") # e.g., "structured-v2"
+OUTPUT_FILENAME    = os.getenv("OUTPUT_FILENAME", "listings_master.csv")
 
 storage_client = storage.Client()
 
@@ -24,10 +27,15 @@ storage_client = storage.Client()
 RUN_ID_ISO_RE   = re.compile(r"^\d{8}T\d{6}Z$")  # 20251026T170002Z
 RUN_ID_PLAIN_RE = re.compile(r"^\d{14}$")        # 20251026170002
 
-# Stable CSV schema (include new fields emitted by extractor-per-listing-v2)
+# Stable CSV schema:
+# - canonical fields (`price`, `year`, `make`, `model`, `mileage`) choose LLM first, then regex fallback
+# - keep both extraction sources for auditability/debugging
 CSV_COLUMNS = [
     "post_id", "run_id", "scraped_at",
     "price", "year", "make", "model", "mileage", "color",
+    "price_regex", "year_regex", "make_regex", "model_regex", "mileage_regex", "transmission_regex", "cylinders_regex",
+    "price_llm", "year_llm", "make_llm", "model_llm", "mileage_llm", "color_llm",
+    "llm_provider", "llm_model", "llm_ts",
     "source_txt"
 ]
 
@@ -44,10 +52,10 @@ def _list_run_ids(bucket: str, structured_prefix: str) -> list[str]:
                 run_ids.append(rid)
     return sorted(run_ids)
 
-def _jsonl_records_for_run(bucket: str, structured_prefix: str, run_id: str):
-    """Yield dict records from .jsonl under .../run_id=<run_id>/jsonl_llm/."""
+def _jsonl_records_for_run(bucket: str, structured_prefix: str, run_id: str, subdir: str):
+    """Yield dict records from .jsonl under .../run_id=<run_id>/<subdir>/."""
     b = storage_client.bucket(bucket)
-    prefix = f"{structured_prefix}/run_id={run_id}/jsonl_llm/"
+    prefix = f"{structured_prefix}/run_id={run_id}/{subdir}/"
     for blob in b.list_blobs(prefix=prefix):
         if not blob.name.endswith(".jsonl"):
             continue
@@ -79,6 +87,53 @@ def _open_gcs_text_writer(bucket: str, key: str):
     return blob.open("w")  # newline handled by csv module
 
 
+def _pick_llm_then_regex(llm_rec: Dict, regex_rec: Dict, key: str):
+    v = llm_rec.get(key) if llm_rec else None
+    if v is not None and v != "":
+        return v
+    return (regex_rec or {}).get(key)
+
+
+def _merged_record(regex_rec: Dict, llm_rec: Dict, run_id: str) -> Dict:
+    regex_rec = regex_rec or {}
+    llm_rec = llm_rec or {}
+
+    return {
+        "post_id": llm_rec.get("post_id") or regex_rec.get("post_id"),
+        "run_id": llm_rec.get("run_id") or regex_rec.get("run_id") or run_id,
+        "scraped_at": llm_rec.get("scraped_at") or regex_rec.get("scraped_at"),
+
+        # Canonical values used downstream
+        "price": _pick_llm_then_regex(llm_rec, regex_rec, "price"),
+        "year": _pick_llm_then_regex(llm_rec, regex_rec, "year"),
+        "make": _pick_llm_then_regex(llm_rec, regex_rec, "make"),
+        "model": _pick_llm_then_regex(llm_rec, regex_rec, "model"),
+        "mileage": _pick_llm_then_regex(llm_rec, regex_rec, "mileage"),
+        "color": llm_rec.get("color"),
+
+        # Source-specific values
+        "price_regex": regex_rec.get("price"),
+        "year_regex": regex_rec.get("year"),
+        "make_regex": regex_rec.get("make"),
+        "model_regex": regex_rec.get("model"),
+        "mileage_regex": regex_rec.get("mileage"),
+        "transmission_regex": regex_rec.get("transmission"),
+        "cylinders_regex": regex_rec.get("cylinders"),
+
+        "price_llm": llm_rec.get("price"),
+        "year_llm": llm_rec.get("year"),
+        "make_llm": llm_rec.get("make"),
+        "model_llm": llm_rec.get("model"),
+        "mileage_llm": llm_rec.get("mileage"),
+        "color_llm": llm_rec.get("color"),
+        "llm_provider": llm_rec.get("llm_provider"),
+        "llm_model": llm_rec.get("llm_model"),
+        "llm_ts": llm_rec.get("llm_ts"),
+
+        "source_txt": llm_rec.get("source_txt") or regex_rec.get("source_txt"),
+    }
+
+
 def _write_csv(records: Iterable[Dict], dest_key: str, columns=CSV_COLUMNS) -> int:
     n = 0
     with _open_gcs_text_writer(BUCKET_NAME, dest_key) as out:
@@ -93,8 +148,8 @@ def _write_csv(records: Iterable[Dict], dest_key: str, columns=CSV_COLUMNS) -> i
 def materialize_http(request: Request):
     """
     HTTP POST (no body needed).
-    Crawls ALL structured-v2 run folders, de-dupes by post_id (keep newest run),
-    and writes one CSV directly to .../datasets/listings_master_llm.csv.
+    Crawls ALL structured-v2 run folders, combines regex + LLM per listing,
+    de-dupes by post_id (keep newest run), and writes one combined CSV.
     Returns JSON with counts and output path.
     """
     try:
@@ -107,16 +162,29 @@ def materialize_http(request: Request):
 
         latest_by_post: Dict[str, Dict] = {}
         for rid in run_ids:
-            for rec in _jsonl_records_for_run(BUCKET_NAME, STRUCTURED_PREFIX, rid):
+            regex_by_post: Dict[str, Dict] = {}
+            llm_by_post: Dict[str, Dict] = {}
+
+            for rec in _jsonl_records_for_run(BUCKET_NAME, STRUCTURED_PREFIX, rid, "jsonl"):
+                pid = rec.get("post_id")
+                if pid:
+                    regex_by_post[pid] = rec
+
+            for rec in _jsonl_records_for_run(BUCKET_NAME, STRUCTURED_PREFIX, rid, "jsonl_llm"):
                 pid = rec.get("post_id")
                 if not pid:
                     continue
+                llm_by_post[pid] = rec
+
+            all_post_ids = set(regex_by_post.keys()) | set(llm_by_post.keys())
+            for pid in all_post_ids:
+                rec = _merged_record(regex_by_post.get(pid), llm_by_post.get(pid), rid)
                 prev = latest_by_post.get(pid)
                 if (prev is None) or (_run_id_to_dt(rec.get("run_id", rid)) > _run_id_to_dt(prev.get("run_id", ""))):
                     latest_by_post[pid] = rec
 
         base = f"{STRUCTURED_PREFIX}/datasets"
-        final_key = f"{base}/listings_master_llm.csv"
+        final_key = f"{base}/{OUTPUT_FILENAME}"
         rows = _write_csv(latest_by_post.values(), final_key)
 
         return jsonify({
