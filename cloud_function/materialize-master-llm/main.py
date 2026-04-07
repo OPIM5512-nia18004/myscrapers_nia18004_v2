@@ -7,6 +7,7 @@
 #   gs://<bucket>/<STRUCTURED_PREFIX>/datasets/listings_master.csv
 
 import csv
+import io
 import json
 import os
 import re
@@ -20,6 +21,7 @@ from google.cloud import storage
 BUCKET_NAME        = os.getenv("GCS_BUCKET")                         # REQUIRED
 STRUCTURED_PREFIX  = os.getenv("STRUCTURED_PREFIX", "structured-v2") # e.g., "structured-v2"
 OUTPUT_FILENAME    = os.getenv("OUTPUT_FILENAME", "listings_master.csv")
+RECENT_RUNS        = int(os.getenv("RECENT_RUNS", "3") or 3)
 
 storage_client = storage.Client()
 
@@ -85,6 +87,35 @@ def _open_gcs_text_writer(bucket: str, key: str):
     blob = b.blob(key)
     # Text mode avoids the flush/finalize pitfall of binary+TextIOWrapper
     return blob.open("w")  # newline handled by csv module
+
+
+def _read_existing_csv(bucket: str, key: str) -> Dict[str, Dict]:
+    b = storage_client.bucket(bucket)
+    blob = b.blob(key)
+    if not blob.exists():
+        return {}
+
+    data = blob.download_as_text()
+    if not data.strip():
+        return {}
+
+    rows: Dict[str, Dict] = {}
+    reader = csv.DictReader(io.StringIO(data))
+    for row in reader:
+        post_id = row.get("post_id")
+        if post_id:
+            rows[post_id] = row
+    return rows
+
+
+def _as_bool(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
 
 
 def _pick_llm_then_regex(llm_rec: Dict, regex_rec: Dict, key: str):
@@ -169,12 +200,28 @@ def materialize_http(request: Request):
                 "output_filename": OUTPUT_FILENAME,
             }), 200
 
+        base = f"{STRUCTURED_PREFIX}/datasets"
+        final_key = f"{base}/{OUTPUT_FILENAME}"
+
         run_ids = _list_run_ids(BUCKET_NAME, STRUCTURED_PREFIX)
         if not run_ids:
             return jsonify({"ok": False, "error": f"no runs found under {STRUCTURED_PREFIX}/"}), 200
 
+        requested_recent_runs = int(body.get("recent_runs") or RECENT_RUNS or 0)
+        full_refresh = _as_bool(body.get("full_refresh"), default=False)
+
         latest_by_post: Dict[str, Dict] = {}
-        for rid in run_ids:
+        seeded_from_existing = False
+        if not full_refresh:
+            latest_by_post = _read_existing_csv(BUCKET_NAME, final_key)
+            seeded_from_existing = bool(latest_by_post)
+
+        if full_refresh or not seeded_from_existing:
+            runs_to_scan = run_ids
+        else:
+            runs_to_scan = run_ids[-requested_recent_runs:] if requested_recent_runs > 0 else run_ids
+
+        for rid in runs_to_scan:
             regex_by_post: Dict[str, Dict] = {}
             llm_by_post: Dict[str, Dict] = {}
 
@@ -196,13 +243,15 @@ def materialize_http(request: Request):
                 if (prev is None) or (_run_id_to_dt(rec.get("run_id", rid)) > _run_id_to_dt(prev.get("run_id", ""))):
                     latest_by_post[pid] = rec
 
-        base = f"{STRUCTURED_PREFIX}/datasets"
-        final_key = f"{base}/{OUTPUT_FILENAME}"
         rows = _write_csv(latest_by_post.values(), final_key)
 
         return jsonify({
             "ok": True,
-            "runs_scanned": len(run_ids),
+            "full_refresh": full_refresh or not seeded_from_existing,
+            "seeded_from_existing": seeded_from_existing,
+            "runs_available": len(run_ids),
+            "runs_scanned": len(runs_to_scan),
+            "recent_runs": requested_recent_runs,
             "unique_listings": len(latest_by_post),
             "rows_written": rows,
             "output_csv": f"gs://{BUCKET_NAME}/{final_key}"
