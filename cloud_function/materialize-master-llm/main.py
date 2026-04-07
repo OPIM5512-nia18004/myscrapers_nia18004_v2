@@ -156,6 +156,19 @@ def materialize_http(request: Request):
         if not BUCKET_NAME:
             return jsonify({"ok": False, "error": "missing GCS_BUCKET env"}), 500
 
+        try:
+            body = request.get_json(silent=True) or {}
+        except Exception:
+            body = {}
+
+        if body.get("healthcheck") is True:
+            return jsonify({
+                "ok": True,
+                "healthcheck": True,
+                "structured_prefix": STRUCTURED_PREFIX,
+                "output_filename": OUTPUT_FILENAME,
+            }), 200
+
         run_ids = _list_run_ids(BUCKET_NAME, STRUCTURED_PREFIX)
         if not run_ids:
             return jsonify({"ok": False, "error": f"no runs found under {STRUCTURED_PREFIX}/"}), 200

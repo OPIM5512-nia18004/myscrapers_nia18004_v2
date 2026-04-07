@@ -20,8 +20,8 @@ env:
   ENTRY_POINT: materialize_http
   RUNTIME: python312
   BUCKET_NAME: ${{ vars.BUCKET_NAME }}
-  TIMEOUT_SECONDS: "3600"
-  MEMORY: "4Gi"
+  TIMEOUT_SECONDS: "1800"
+  MEMORY: "2Gi"
   STRUCTURED_PREFIX: "structured-v2"
   RUNTIME_SA: ${{ vars.RUNTIME_SA }}
   DEPLOYER_SA: ${{ vars.DEPLOYER_SA }}
@@ -192,4 +192,4 @@ jobs:
           curl -i -sS -X POST "$URL" \
             -H "Authorization: Bearer ${TOKEN}" \
             -H "Content-Type: application/json" \
-            -d '${{ env.SCHEDULE_BODY }}' || true
+            -d '{"healthcheck":true}' || true
