@@ -6,7 +6,7 @@ on:
     branches: [ main ]
     paths:
       - 'cloud_function/extractor-per-listing-v2/**'
-      - '.github/workflows/deploy-extractor v2.yml'
+      - '.github/workflows/deploy-extractor-llm v2.yml'
   workflow_dispatch: {}
 
 permissions:
