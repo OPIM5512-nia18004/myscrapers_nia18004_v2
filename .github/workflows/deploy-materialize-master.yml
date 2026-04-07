@@ -2,11 +2,6 @@ name: Deploy materialize-master (CF Gen2 + Cloud Scheduler)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
-    paths:
-      - 'cloud_function/materialize-master/**'
-      - '.github/workflows/deploy-materialize-master.yml'
 
 permissions:
   contents: read
@@ -22,7 +17,7 @@ env:
   BUCKET_NAME: ${{ vars.BUCKET_NAME }}
   TIMEOUT_SECONDS: "900"
   MEMORY: "2Gi"
-  STRUCTURED_PREFIX: "structured-v2"
+  STRUCTURED_PREFIX: "structured"
   RUNTIME_SA: ${{ vars.RUNTIME_SA }}
   DEPLOYER_SA: ${{ vars.DEPLOYER_SA }}
   WORKLOAD_IDENTITY_PROVIDER: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
