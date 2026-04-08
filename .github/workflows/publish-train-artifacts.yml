@@ -57,6 +57,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p artifacts
           HTTP_CODE=$(curl -sS -o artifacts/train_response.json -w "%{http_code}" -X POST "${{ steps.train-url.outputs.url }}" \
             -H "Authorization: Bearer ${{ steps.auth-train.outputs.id_token }}" \
             -H "Content-Type: application/json" \
