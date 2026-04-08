@@ -53,16 +53,39 @@ jobs:
           id_token_audience: ${{ steps.train-url.outputs.url }}
           id_token_include_email: true
 
+      - name: Trigger latest training run
+        shell: bash
+        run: |
+          set -euo pipefail
+          HTTP_CODE=$(curl -sS -o artifacts/train_response.json -w "%{http_code}" -X POST "${{ steps.train-url.outputs.url }}" \
+            -H "Authorization: Bearer ${{ steps.auth-train.outputs.id_token }}" \
+            -H "Content-Type: application/json" \
+            -d '{"dry_run":false}')
+          echo "train-dt HTTP status: ${HTTP_CODE}"
+          cat artifacts/train_response.json
+          echo
+          if [[ "${HTTP_CODE}" != "200" && "${HTTP_CODE}" != "204" ]]; then
+            echo "::error::train-dt invocation failed before artifact publish."
+            exit 1
+          fi
+
       - name: Download latest training artifact bundle
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          curl -sS -X POST "${{ steps.train-url.outputs.url }}" \
+          HTTP_CODE=$(curl -sS -D artifacts/bundle_headers.txt -o artifacts/training_artifacts.zip -w "%{http_code}" -X POST "${{ steps.train-url.outputs.url }}" \
             -H "Authorization: Bearer ${{ steps.auth-train.outputs.id_token }}" \
             -H "Content-Type: application/json" \
-            -d '{"download_latest_bundle":true}' \
-            --output artifacts/training_artifacts.zip
+            -d '{"download_latest_bundle":true}')
+          echo "bundle HTTP status: ${HTTP_CODE}"
+          cat artifacts/bundle_headers.txt
+          if ! grep -qi '^content-type: application/zip' artifacts/bundle_headers.txt; then
+            echo "::error::Expected a ZIP bundle but received a different response."
+            echo "Response body:"
+            cat artifacts/training_artifacts.zip || true
+            exit 1
+          fi
           unzip -o artifacts/training_artifacts.zip -d artifacts
 
       - name: Upload GitHub artifacts
