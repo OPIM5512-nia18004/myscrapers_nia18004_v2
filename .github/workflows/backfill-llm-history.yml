@@ -81,49 +81,18 @@ jobs:
           id_token_audience: ${{ steps.urls.outputs.materializer_url }}
           id_token_include_email: true
 
-      - name: List historical scrape runs
+      - name: Backfill LLM outputs across history
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          gcloud storage ls "gs://${BUCKET_NAME}/scrapes/" > artifacts/run_uris.txt
-          python - <<'PY'
-          import pathlib
-          import re
-
-          uris = pathlib.Path('artifacts/run_uris.txt').read_text().splitlines()
-          pattern = re.compile(r'/(?:run_id=)?([^/]+)/?$')
-          runs = []
-          for uri in uris:
-              match = pattern.search(uri.strip())
-              if match:
-                  runs.append(match.group(1))
-          runs = sorted(set(runs))
-          pathlib.Path('artifacts/run_ids.txt').write_text('\n'.join(runs))
-          print(f'Found {len(runs)} runs')
-          PY
-
-          if [[ "${{ inputs.max_runs }}" != "0" ]]; then
-            tail -n "${{ inputs.max_runs }}" artifacts/run_ids.txt > artifacts/run_ids.selected.txt
-            mv artifacts/run_ids.selected.txt artifacts/run_ids.txt
-          fi
-
-      - name: Backfill LLM outputs per run
-        shell: bash
-        run: |
-          set -euo pipefail
           EXTRACTOR_URL="${{ steps.urls.outputs.extractor_url }}"
           EXTRACTOR_TOKEN="${{ steps.auth-extractor.outputs.id_token }}"
-          : > artifacts/backfill_results.jsonl
-          while IFS= read -r RUN_ID; do
-            [[ -z "$RUN_ID" ]] && continue
-            echo "Processing run $RUN_ID"
-            RESPONSE=$(curl -sS -X POST "$EXTRACTOR_URL" \
-              -H "Authorization: Bearer ${EXTRACTOR_TOKEN}" \
-              -H "Content-Type: application/json" \
-              -d "{\"run_id\":\"${RUN_ID}\",\"overwrite\":${{ inputs.overwrite }},\"max_files\":${{ inputs.max_files }}}")
-            echo "$RESPONSE" | tee -a artifacts/backfill_results.jsonl
-          done < artifacts/run_ids.txt
+          RESPONSE=$(curl -sS -X POST "$EXTRACTOR_URL" \
+            -H "Authorization: Bearer ${EXTRACTOR_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"all_runs":true,"overwrite":${{ inputs.overwrite }},"run_limit":${{ inputs.max_runs }},"max_files":${{ inputs.max_files }}}')
+          echo "$RESPONSE" | tee artifacts/backfill_result.json
 
       - name: Rebuild canonical master CSV
         shell: bash
