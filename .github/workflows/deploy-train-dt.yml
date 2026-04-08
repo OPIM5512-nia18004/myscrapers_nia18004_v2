@@ -119,12 +119,39 @@ jobs:
             exit 1
           fi
 
+          retry_policy_binding() {
+            local max_attempts="$1"
+            shift
+            local attempt=1
+            local delay=2
+            while true; do
+              local output
+              local status=0
+              output=$("$@" 2>&1) || status=$?
+              if [[ $status -eq 0 ]]; then
+                printf '%s\n' "$output"
+                return 0
+              fi
+              printf '%s\n' "$output"
+              if [[ $attempt -ge $max_attempts ]]; then
+                return $status
+              fi
+              if [[ "$output" != *"ABORTED: There were concurrent policy changes"* ]]; then
+                return $status
+              fi
+              echo "Transient IAM policy race detected. Retry ${attempt}/${max_attempts} in ${delay}s..."
+              sleep "$delay"
+              attempt=$((attempt + 1))
+              delay=$((delay * 2))
+            done
+          }
+
           PROJECT_NUMBER="$(gcloud projects describe "${PROJECT_ID}" --format='value(projectNumber)')"
           SCHED_AGENT="service-${PROJECT_NUMBER}@gcp-sa-cloudscheduler.iam.gserviceaccount.com"
           echo "Scheduler agent: ${SCHED_AGENT}"
 
           # 1) Scheduler may mint OIDC tokens as the runtime SA
-          if ! gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" \
+          if ! retry_policy_binding 5 gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" \
             --member="serviceAccount:${SCHED_AGENT}" \
             --role="roles/iam.serviceAccountTokenCreator"; then
             echo "::error::Permission denied adding tokenCreator to ${RUNTIME_SA}. Run (once as project owner):"
@@ -133,7 +160,7 @@ jobs:
           fi
 
           # 2) Deployer may 'actAs' the runtime SA to create/update the job
-          if ! gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" \
+          if ! retry_policy_binding 5 gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" \
             --member="serviceAccount:${DEPLOYER_SA}" \
             --role="roles/iam.serviceAccountUser"; then
             echo "::error::Permission denied adding ServiceAccountUser for ${DEPLOYER_SA} on ${RUNTIME_SA}. Run:"
