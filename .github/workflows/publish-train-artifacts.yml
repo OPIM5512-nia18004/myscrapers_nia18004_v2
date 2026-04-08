@@ -12,8 +12,7 @@ permissions:
 env:
   PROJECT_ID: ${{ vars.PROJECT_ID }}
   REGION: ${{ vars.REGION }}
-  BUCKET_NAME: ${{ vars.BUCKET_NAME }}
-  OUTPUT_PREFIX: structured-v2/modeling
+  TRAIN_FUNCTION_NAME: train-dt
   DEPLOYER_SA: ${{ vars.DEPLOYER_SA }}
   WORKLOAD_IDENTITY_PROVIDER: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
 
@@ -36,76 +35,35 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      - name: Ensure deployer can read modeling artifacts
+      - name: Resolve train function URL
+        id: train-url
         shell: bash
         run: |
           set -euo pipefail
+          URL=$(gcloud functions describe "${TRAIN_FUNCTION_NAME}" --gen2 --region "${REGION}" --format='value(serviceConfig.uri)')
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
 
-          retry_policy_binding() {
-            local max_attempts="$1"
-            shift
-            local attempt=1
-            local delay=2
-            while true; do
-              local output
-              local status=0
-              output=$("$@" 2>&1) || status=$?
-              if [[ $status -eq 0 ]]; then
-                printf '%s\n' "$output"
-                return 0
-              fi
-              printf '%s\n' "$output"
-              if [[ $attempt -ge $max_attempts ]]; then
-                return $status
-              fi
-              if [[ "$output" != *"ABORTED: There were concurrent policy changes"* ]]; then
-                return $status
-              fi
-              echo "Transient IAM policy race detected. Retry ${attempt}/${max_attempts} in ${delay}s..."
-              sleep "$delay"
-              attempt=$((attempt + 1))
-              delay=$((delay * 2))
-            done
-          }
+      - name: Mint train function ID token
+        id: auth-train
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.DEPLOYER_SA }}
+          token_format: id_token
+          id_token_audience: ${{ steps.train-url.outputs.url }}
+          id_token_include_email: true
 
-          if ! retry_policy_binding 5 gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
-            --member="serviceAccount:${DEPLOYER_SA}" \
-            --role="roles/storage.objectViewer"; then
-            echo "::error::Could not grant roles/storage.objectViewer to ${DEPLOYER_SA}."
-            echo "Run once as a project owner:"
-            echo "gcloud storage buckets add-iam-policy-binding gs://${BUCKET_NAME} --member=serviceAccount:${DEPLOYER_SA} --role=roles/storage.objectViewer"
-            exit 1
-          fi
-
-      - name: Download latest training artifacts from GCS
+      - name: Download latest training artifact bundle
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          gcloud storage cp "gs://${BUCKET_NAME}/${OUTPUT_PREFIX}/latest_manifest.json" artifacts/latest_manifest.json
-          python - <<'PY' > artifacts/download_uris.txt
-          import json
-          from pathlib import Path
-
-          manifest = json.loads(Path('artifacts/latest_manifest.json').read_text())
-          gcs_paths = manifest.get('gcs_paths', {})
-          uris = [
-              gcs_paths.get('predictions'),
-              gcs_paths.get('permutation_importance'),
-              gcs_paths.get('metrics_json'),
-              gcs_paths.get('best_params_json'),
-              gcs_paths.get('metrics_history'),
-          ]
-          uris.extend(gcs_paths.get('pdp', []))
-          for uri in uris:
-              if uri:
-                  print(uri)
-          PY
-
-          while IFS= read -r URI; do
-            [[ -z "$URI" ]] && continue
-            gcloud storage cp "$URI" "artifacts/$(basename "$URI")"
-          done < artifacts/download_uris.txt
+          curl -sS -X POST "${{ steps.train-url.outputs.url }}" \
+            -H "Authorization: Bearer ${{ steps.auth-train.outputs.id_token }}" \
+            -H "Content-Type: application/json" \
+            -d '{"download_latest_bundle":true}' \
+            --output artifacts/training_artifacts.zip
+          unzip -o artifacts/training_artifacts.zip -d artifacts
 
       - name: Upload GitHub artifacts
         uses: actions/upload-artifact@v4

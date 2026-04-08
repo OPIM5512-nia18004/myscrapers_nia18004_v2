@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import traceback
+import zipfile
 from datetime import datetime, timezone
 
 import matplotlib
@@ -56,6 +57,20 @@ def _write_json_to_gcs(client: storage.Client, bucket: str, key: str, payload: d
 
 def _write_bytes_to_gcs(client: storage.Client, bucket: str, key: str, payload: bytes, content_type: str):
     client.bucket(bucket).blob(key).upload_from_string(payload, content_type=content_type)
+
+
+def _read_text_from_gcs(client: storage.Client, bucket: str, key: str) -> str:
+    blob = client.bucket(bucket).blob(key)
+    if not blob.exists():
+        raise FileNotFoundError(f"gs://{bucket}/{key} not found")
+    return blob.download_as_text()
+
+
+def _read_bytes_from_gcs(client: storage.Client, bucket: str, key: str) -> bytes:
+    blob = client.bucket(bucket).blob(key)
+    if not blob.exists():
+        raise FileNotFoundError(f"gs://{bucket}/{key} not found")
+    return blob.download_as_bytes()
 
 
 def _clean_numeric(series: pd.Series) -> pd.Series:
@@ -195,6 +210,41 @@ def _choose_pdp_features(importance_df: pd.DataFrame, feature_frame: pd.DataFram
         if len(chosen) == 3:
             break
     return chosen
+
+
+def _bundle_latest_artifacts(client: storage.Client) -> tuple[bytes, str]:
+    manifest_key = f"{OUTPUT_PREFIX}/latest_manifest.json"
+    manifest = json.loads(_read_text_from_gcs(client, GCS_BUCKET, manifest_key))
+    gcs_paths = manifest.get("gcs_paths", {})
+
+    files_to_bundle: list[tuple[str, str]] = [
+        (manifest_key, "latest_manifest.json"),
+    ]
+    singletons = {
+        "predictions": "predictions.csv",
+        "permutation_importance": "permutation_importance.csv",
+        "metrics_json": "metrics.json",
+        "best_params_json": "best_params.json",
+        "metrics_history": "metrics_history.csv",
+    }
+    for key, archive_name in singletons.items():
+        uri = gcs_paths.get(key)
+        if uri and uri.startswith(f"gs://{GCS_BUCKET}/"):
+            files_to_bundle.append((uri.replace(f"gs://{GCS_BUCKET}/", ""), archive_name))
+
+    for uri in gcs_paths.get("pdp", []):
+        if uri and uri.startswith(f"gs://{GCS_BUCKET}/"):
+            key = uri.replace(f"gs://{GCS_BUCKET}/", "")
+            files_to_bundle.append((key, os.path.basename(key)))
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("manifest.json", json.dumps(manifest, indent=2, sort_keys=True))
+        for gcs_key, archive_name in files_to_bundle:
+            archive.writestr(archive_name, _read_bytes_from_gcs(client, GCS_BUCKET, gcs_key))
+
+    filename = f"training_artifacts_{manifest.get('run_ts', 'latest')}.zip"
+    return buffer.getvalue(), filename
 
 
 def run_once(dry_run: bool = False) -> dict:
@@ -371,6 +421,14 @@ def train_dt_http(request):
         if body.get("healthcheck") is True:
             result = {"status": "ok", "healthcheck": True, "function": "train-dt"}
             return json.dumps(result), 200, {"Content-Type": "application/json"}
+
+        if body.get("download_latest_bundle") is True:
+            client = storage.Client(project=PROJECT_ID)
+            bundle_bytes, filename = _bundle_latest_artifacts(client)
+            return bundle_bytes, 200, {
+                "Content-Type": "application/zip",
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            }
 
         result = run_once(dry_run=bool(body.get("dry_run", False)))
         code = 200 if result.get("status") == "ok" else 204
