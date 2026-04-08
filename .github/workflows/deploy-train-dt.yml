@@ -22,14 +22,14 @@ env:
   BUCKET_NAME: ${{ vars.BUCKET_NAME }}
   TIMEOUT_SECONDS: "900"
   MEMORY: "2Gi"
-  DATA_KEY: "structured/datasets/listings_master.csv"
-  OUTPUT_PREFIX: "structured/preds"
+  DATA_KEY: "structured-v2/datasets/listings_master.csv"
+  OUTPUT_PREFIX: "structured-v2/modeling"
   # Align with your other workflows
   RUNTIME_SA: ${{ vars.RUNTIME_SA }}                 # function runtime SA (email)
   DEPLOYER_SA: ${{ vars.DEPLOYER_SA }}               # GitHub deploy SA (email)
   WORKLOAD_IDENTITY_PROVIDER: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
-  SCHEDULE_BODY: ${{ vars.TRAIN_DT_BODY ||'{"dry_run":true}'}}
-  CRON_EXPR: "20 * * * *"                             # :20 each hour (ET)
+  SCHEDULE_BODY: ${{ vars.TRAIN_DT_BODY ||'{"dry_run":false}'}}
+  CRON_EXPR: "50 * * * *"                             # :50 each hour (ET)
 
 jobs:
   deploy:
@@ -141,7 +141,7 @@ jobs:
             exit 1
           fi
 
-      - name: Create/Update Cloud Scheduler job (:20 ET, OIDC)
+      - name: Create/Update Cloud Scheduler job (:50 ET, OIDC)
         shell: bash
         run: |
           set -euo pipefail
@@ -194,4 +194,4 @@ jobs:
           curl -i -sS -X POST "$URL" \
             -H "Authorization: Bearer ${TOKEN}" \
             -H "Content-Type: application/json" \
-            -d '${{ env.SCHEDULE_BODY }}' || true
+            -d '{"healthcheck":true}' || true

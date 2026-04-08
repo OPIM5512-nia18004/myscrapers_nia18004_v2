@@ -139,7 +139,7 @@ jobs:
             exit 1
           fi
 
-      - name: Create/Update Cloud Scheduler job (:15 ET, OIDC)
+      - name: Create/Update Cloud Scheduler job (:45 ET, OIDC)
         shell: bash
         run: |
           set -euo pipefail
@@ -192,4 +192,4 @@ jobs:
           curl -i -sS -X POST "$URL" \
             -H "Authorization: Bearer ${TOKEN}" \
             -H "Content-Type: application/json" \
-            -d '${{ env.SCHEDULE_BODY }}' || true
+            -d '{"healthcheck":true}' || true

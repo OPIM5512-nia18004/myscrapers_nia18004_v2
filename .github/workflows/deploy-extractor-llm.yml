@@ -28,6 +28,7 @@ env:
   LLM_MODEL: ${{ vars.LLM_MODEL || 'gemini-2.5-flash' }} # <-- CHANGE HERE
   LLM_OVERWRITE: ${{ vars.LLM_OVERWRITE || 'false' }}
   LLM_MAX_FILES: ${{ vars.LLM_MAX_FILES || '0' }}
+  SCRAPES_PREFIX: ${{ vars.SCRAPES_PREFIX || 'scrapes' }}
   LLM_STRUCTURED_PREFIX: ${{ vars.LLM_STRUCTURED_PREFIX || vars.STRUCTURED_PREFIX || 'structured-v2' }}
   SCHEDULE_BODY: ${{ vars.EXTRACTOR_LLM_BODY || '{"overwrite":false,"max_files":0}' }}
   CRON_EXPR: "12 * * * *"
@@ -91,7 +92,7 @@ jobs:
             --no-allow-unauthenticated \
             --memory=1024Mi \
             "${SA_ARGS[@]}" \
-            --set-env-vars="PROJECT_ID=${PROJECT_ID},GCS_BUCKET=${BUCKET_NAME},STRUCTURED_PREFIX=${LLM_STRUCTURED_PREFIX},LLM_PROVIDER=${LLM_PROVIDER},LLM_MODEL=${LLM_MODEL},OVERWRITE=${LLM_OVERWRITE},MAX_FILES=${LLM_MAX_FILES}"
+            --set-env-vars="PROJECT_ID=${PROJECT_ID},GCS_BUCKET=${BUCKET_NAME},SCRAPES_PREFIX=${SCRAPES_PREFIX},STRUCTURED_PREFIX=${LLM_STRUCTURED_PREFIX},LLM_PROVIDER=${LLM_PROVIDER},LLM_MODEL=${LLM_MODEL},OVERWRITE=${LLM_OVERWRITE},MAX_FILES=${LLM_MAX_FILES}"
 
       - name: Get Function URL
         id: cfurl

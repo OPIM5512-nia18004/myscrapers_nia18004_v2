@@ -1,0 +1,141 @@
+name: Backfill LLM history
+
+on:
+  workflow_dispatch:
+    inputs:
+      overwrite:
+        description: Overwrite existing LLM jsonl outputs
+        required: false
+        default: false
+        type: boolean
+      max_runs:
+        description: Process only the most recent N scrape runs (0 = all)
+        required: false
+        default: '0'
+        type: string
+      max_files:
+        description: Process only the first N txt files per run (0 = all)
+        required: false
+        default: '0'
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: ${{ vars.PROJECT_ID }}
+  REGION: ${{ vars.REGION }}
+  BUCKET_NAME: ${{ vars.BUCKET_NAME }}
+  EXTRACTOR_FUNCTION_NAME: extractor-llm-poc
+  MATERIALIZER_FUNCTION_NAME: materialize-master-llm
+  DEPLOYER_SA: ${{ vars.DEPLOYER_SA }}
+  WORKLOAD_IDENTITY_PROVIDER: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Auth (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.DEPLOYER_SA }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Resolve function URLs
+        id: urls
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXTRACTOR_URL=$(gcloud functions describe "${EXTRACTOR_FUNCTION_NAME}" --gen2 --region "${REGION}" --format='value(serviceConfig.uri)')
+          MATERIALIZER_URL=$(gcloud functions describe "${MATERIALIZER_FUNCTION_NAME}" --gen2 --region "${REGION}" --format='value(serviceConfig.uri)')
+          echo "extractor_url=${EXTRACTOR_URL}" >> "$GITHUB_OUTPUT"
+          echo "materializer_url=${MATERIALIZER_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Mint extractor ID token
+        id: auth-extractor
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.DEPLOYER_SA }}
+          token_format: id_token
+          id_token_audience: ${{ steps.urls.outputs.extractor_url }}
+          id_token_include_email: true
+
+      - name: Mint materializer ID token
+        id: auth-materializer
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.DEPLOYER_SA }}
+          token_format: id_token
+          id_token_audience: ${{ steps.urls.outputs.materializer_url }}
+          id_token_include_email: true
+
+      - name: List historical scrape runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          gcloud storage ls "gs://${BUCKET_NAME}/scrapes/" > artifacts/run_uris.txt
+          python - <<'PY'
+          import pathlib
+          import re
+
+          uris = pathlib.Path('artifacts/run_uris.txt').read_text().splitlines()
+          pattern = re.compile(r'/(?:run_id=)?([^/]+)/?$')
+          runs = []
+          for uri in uris:
+              match = pattern.search(uri.strip())
+              if match:
+                  runs.append(match.group(1))
+          runs = sorted(set(runs))
+          pathlib.Path('artifacts/run_ids.txt').write_text('\n'.join(runs))
+          print(f'Found {len(runs)} runs')
+          PY
+
+          if [[ "${{ inputs.max_runs }}" != "0" ]]; then
+            tail -n "${{ inputs.max_runs }}" artifacts/run_ids.txt > artifacts/run_ids.selected.txt
+            mv artifacts/run_ids.selected.txt artifacts/run_ids.txt
+          fi
+
+      - name: Backfill LLM outputs per run
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXTRACTOR_URL="${{ steps.urls.outputs.extractor_url }}"
+          EXTRACTOR_TOKEN="${{ steps.auth-extractor.outputs.id_token }}"
+          : > artifacts/backfill_results.jsonl
+          while IFS= read -r RUN_ID; do
+            [[ -z "$RUN_ID" ]] && continue
+            echo "Processing run $RUN_ID"
+            RESPONSE=$(curl -sS -X POST "$EXTRACTOR_URL" \
+              -H "Authorization: Bearer ${EXTRACTOR_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "{\"run_id\":\"${RUN_ID}\",\"overwrite\":${{ inputs.overwrite }},\"max_files\":${{ inputs.max_files }}}")
+            echo "$RESPONSE" | tee -a artifacts/backfill_results.jsonl
+          done < artifacts/run_ids.txt
+
+      - name: Rebuild canonical master CSV
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sS -X POST "${{ steps.urls.outputs.materializer_url }}" \
+            -H "Authorization: Bearer ${{ steps.auth-materializer.outputs.id_token }}" \
+            -H "Content-Type: application/json" \
+            -d '{}' | tee artifacts/materialize_result.json
+
+      - name: Upload backfill logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-backfill-results
+          path: artifacts/

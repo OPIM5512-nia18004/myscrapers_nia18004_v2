@@ -1,0 +1,73 @@
+name: Publish training artifacts
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '55 * * * *'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: ${{ vars.PROJECT_ID }}
+  REGION: ${{ vars.REGION }}
+  BUCKET_NAME: ${{ vars.BUCKET_NAME }}
+  OUTPUT_PREFIX: structured-v2/modeling
+  DEPLOYER_SA: ${{ vars.DEPLOYER_SA }}
+  WORKLOAD_IDENTITY_PROVIDER: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Auth (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.DEPLOYER_SA }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Download latest training artifacts from GCS
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          gcloud storage cp "gs://${BUCKET_NAME}/${OUTPUT_PREFIX}/latest_manifest.json" artifacts/latest_manifest.json
+          python - <<'PY' > artifacts/download_uris.txt
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path('artifacts/latest_manifest.json').read_text())
+          gcs_paths = manifest.get('gcs_paths', {})
+          uris = [
+              gcs_paths.get('predictions'),
+              gcs_paths.get('permutation_importance'),
+              gcs_paths.get('metrics_json'),
+              gcs_paths.get('best_params_json'),
+              gcs_paths.get('metrics_history'),
+          ]
+          uris.extend(gcs_paths.get('pdp', []))
+          for uri in uris:
+              if uri:
+                  print(uri)
+          PY
+
+          while IFS= read -r URI; do
+            [[ -z "$URI" ]] && continue
+            gcloud storage cp "$URI" "artifacts/$(basename "$URI")"
+          done < artifacts/download_uris.txt
+
+      - name: Upload GitHub artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: training-artifacts
+          path: artifacts/

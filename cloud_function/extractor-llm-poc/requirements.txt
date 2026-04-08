@@ -1,7 +1,5 @@
-# cloud_function/extractor-llm-poc/requirements.txt
-# Core dependencies for GCS and Google Cloud Function
-flask
-google-cloud-storage
-
-# Dependency for Vertex AI / Gemini API calls
-vertexai
+flask>=3.0.0
+functions-framework>=3.5.0
+google-cloud-storage>=2.16.0
+google-api-core>=2.19.0
+google-cloud-aiplatform>=1.70.0
