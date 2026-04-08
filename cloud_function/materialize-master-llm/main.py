@@ -21,6 +21,7 @@ from google.cloud import storage
 BUCKET_NAME        = os.getenv("GCS_BUCKET")                         # REQUIRED
 STRUCTURED_PREFIX  = os.getenv("STRUCTURED_PREFIX", "structured-v2") # e.g., "structured-v2"
 OUTPUT_FILENAME    = os.getenv("OUTPUT_FILENAME", "listings_master.csv")
+DEBUG_OUTPUT_FILENAME = os.getenv("DEBUG_OUTPUT_FILENAME", "listings_master_debug.csv")
 RECENT_RUNS        = int(os.getenv("RECENT_RUNS", "3") or 3)
 
 storage_client = storage.Client()
@@ -32,9 +33,17 @@ RUN_ID_PLAIN_RE = re.compile(r"^\d{14}$")        # 20251026170002
 # Stable CSV schema:
 # - canonical fields (`price`, `year`, `make`, `model`, `mileage`) choose LLM first, then regex fallback
 # - keep both extraction sources for auditability/debugging
-CSV_COLUMNS = [
+CLEAN_COLUMNS = [
     "post_id", "run_id", "scraped_at",
     "price", "year", "make", "model", "mileage", "color",
+    "transmission", "cylinders",
+    "source_txt"
+]
+
+DEBUG_COLUMNS = [
+    "post_id", "run_id", "scraped_at",
+    "price", "year", "make", "model", "mileage", "color",
+    "transmission", "cylinders",
     "price_regex", "year_regex", "make_regex", "model_regex", "mileage_regex", "transmission_regex", "cylinders_regex",
     "price_llm", "year_llm", "make_llm", "model_llm", "mileage_llm", "color_llm",
     "llm_provider", "llm_model", "llm_ts",
@@ -141,6 +150,8 @@ def _merged_record(regex_rec: Dict, llm_rec: Dict, run_id: str) -> Dict:
         "model": _pick_llm_then_regex(llm_rec, regex_rec, "model"),
         "mileage": _pick_llm_then_regex(llm_rec, regex_rec, "mileage"),
         "color": llm_rec.get("color"),
+        "transmission": regex_rec.get("transmission"),
+        "cylinders": regex_rec.get("cylinders"),
 
         # Source-specific values
         "price_regex": regex_rec.get("price"),
@@ -165,7 +176,7 @@ def _merged_record(regex_rec: Dict, llm_rec: Dict, run_id: str) -> Dict:
     }
 
 
-def _write_csv(records: Iterable[Dict], dest_key: str, columns=CSV_COLUMNS) -> int:
+def _write_csv(records: Iterable[Dict], dest_key: str, columns) -> int:
     n = 0
     with _open_gcs_text_writer(BUCKET_NAME, dest_key) as out:
         w = csv.DictWriter(out, fieldnames=columns, extrasaction="ignore")
@@ -198,10 +209,12 @@ def materialize_http(request: Request):
                 "healthcheck": True,
                 "structured_prefix": STRUCTURED_PREFIX,
                 "output_filename": OUTPUT_FILENAME,
+                "debug_output_filename": DEBUG_OUTPUT_FILENAME,
             }), 200
 
         base = f"{STRUCTURED_PREFIX}/datasets"
         final_key = f"{base}/{OUTPUT_FILENAME}"
+        debug_key = f"{base}/{DEBUG_OUTPUT_FILENAME}"
 
         run_ids = _list_run_ids(BUCKET_NAME, STRUCTURED_PREFIX)
         if not run_ids:
@@ -243,7 +256,8 @@ def materialize_http(request: Request):
                 if (prev is None) or (_run_id_to_dt(rec.get("run_id", rid)) > _run_id_to_dt(prev.get("run_id", ""))):
                     latest_by_post[pid] = rec
 
-        rows = _write_csv(latest_by_post.values(), final_key)
+        rows = _write_csv(latest_by_post.values(), final_key, CLEAN_COLUMNS)
+        debug_rows = _write_csv(latest_by_post.values(), debug_key, DEBUG_COLUMNS)
 
         return jsonify({
             "ok": True,
@@ -254,7 +268,9 @@ def materialize_http(request: Request):
             "recent_runs": requested_recent_runs,
             "unique_listings": len(latest_by_post),
             "rows_written": rows,
-            "output_csv": f"gs://{BUCKET_NAME}/{final_key}"
+            "rows_written_debug": debug_rows,
+            "output_csv": f"gs://{BUCKET_NAME}/{final_key}",
+            "output_csv_debug": f"gs://{BUCKET_NAME}/{debug_key}"
         }), 200
     except Exception as e:
         # Return a JSON error so you don't just see a plain 500
