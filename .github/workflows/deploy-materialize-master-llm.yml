@@ -192,4 +192,4 @@ jobs:
           curl -i -sS -X POST "$URL" \
             -H "Authorization: Bearer ${TOKEN}" \
             -H "Content-Type: application/json" \
-            -d '{"healthcheck":true}' || true
+            -d '${{ env.SCHEDULE_BODY }}' || true
