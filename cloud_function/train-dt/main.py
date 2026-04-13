@@ -79,17 +79,22 @@ def _clean_numeric(series: pd.Series) -> pd.Series:
 
 
 def _clean_text(series: pd.Series) -> pd.Series:
-    return series.astype("string").str.strip().replace({"": pd.NA, "nan": pd.NA, "None": pd.NA})
+    cleaned = series.astype("string").str.strip().replace({"": pd.NA, "nan": pd.NA, "None": pd.NA})
+    return cleaned.astype(object).where(cleaned.notna(), np.nan)
 
 
 def _clean_state(series: pd.Series) -> pd.Series:
     cleaned = _clean_text(series)
-    return cleaned.map(lambda value: value.upper() if pd.notna(value) and len(value) <= 3 else value.title() if pd.notna(value) else value)
+    normalized = cleaned.map(
+        lambda value: value.upper() if pd.notna(value) and len(value) <= 3 else value.title() if pd.notna(value) else value
+    )
+    return normalized.astype(object).where(pd.notna(normalized), np.nan)
 
 
 def _clean_zip(series: pd.Series) -> pd.Series:
     cleaned = _clean_text(series)
-    return cleaned.map(lambda value: ZIP_RE.search(value).group(0) if pd.notna(value) and ZIP_RE.search(value) else value)
+    normalized = cleaned.map(lambda value: ZIP_RE.search(value).group(0) if pd.notna(value) and ZIP_RE.search(value) else value)
+    return normalized.astype(object).where(pd.notna(normalized), np.nan)
 
 
 def _safe_mape(y_true: pd.Series, y_pred: np.ndarray) -> float | None:
@@ -120,7 +125,7 @@ def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     prepared = df.copy()
     for column in ["make", "model", "color", "city", "state", "zip_code", "price", "year", "mileage", "post_id", "scraped_at"]:
         if column not in prepared.columns:
-            prepared[column] = pd.NA
+            prepared[column] = np.nan
 
     prepared["scraped_at_dt_utc"] = pd.to_datetime(prepared["scraped_at"], errors="coerce", utc=True)
     try:
