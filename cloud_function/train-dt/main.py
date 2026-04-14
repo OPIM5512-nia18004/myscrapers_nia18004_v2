@@ -35,6 +35,14 @@ RANDOM_STATE = int(os.getenv("RANDOM_STATE", "42") or 42)
 logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s %(levelname)s %(message)s")
 
 ZIP_RE = re.compile(r"\b\d{5}(?:-\d{4})?\b")
+FUEL_ALIASES = {
+    "gasoline": "gas",
+    "petrol": "gas",
+    "ev": "electric",
+    "plug in hybrid": "plug-in hybrid",
+    "phev": "plug-in hybrid",
+    "flex fuel": "flex-fuel",
+}
 
 
 def _read_csv_from_gcs(client: storage.Client, bucket: str, key: str) -> pd.DataFrame:
@@ -97,6 +105,32 @@ def _clean_zip(series: pd.Series) -> pd.Series:
     return normalized.astype(object).where(pd.notna(normalized), np.nan)
 
 
+def _clean_transmission(series: pd.Series) -> pd.Series:
+    cleaned = _clean_text(series)
+    normalized = cleaned.map(
+        lambda value: (
+            "automatic" if pd.notna(value) and ("automatic" in str(value).lower() or str(value).lower() in {"auto", "a/t"})
+            else "manual" if pd.notna(value) and ("manual" in str(value).lower() or str(value).lower() in {"man", "m/t", "stick"})
+            else "cvt" if pd.notna(value) and "cvt" in str(value).lower()
+            else str(value).lower() if pd.notna(value) else value
+        )
+    )
+    return normalized.astype(object).where(pd.notna(normalized), np.nan)
+
+
+def _clean_cylinders(series: pd.Series) -> pd.Series:
+    extracted = series.astype(str).str.extract(r"(\d+)", expand=False)
+    return pd.to_numeric(extracted, errors="coerce")
+
+
+def _clean_fuel_type(series: pd.Series) -> pd.Series:
+    cleaned = _clean_text(series)
+    normalized = cleaned.map(
+        lambda value: FUEL_ALIASES.get(str(value).lower(), str(value).lower()) if pd.notna(value) else value
+    )
+    return normalized.astype(object).where(pd.notna(normalized), np.nan)
+
+
 def _safe_mape(y_true: pd.Series, y_pred: np.ndarray) -> float | None:
     mask = y_true.notna() & (y_true != 0)
     if not mask.any():
@@ -123,7 +157,10 @@ def _metrics_payload(y_true: pd.Series, y_pred: np.ndarray) -> dict:
 
 def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     prepared = df.copy()
-    for column in ["make", "model", "color", "city", "state", "zip_code", "price", "year", "mileage", "post_id", "scraped_at"]:
+    for column in [
+        "make", "model", "color", "city", "state", "zip_code", "transmission", "fuel_type",
+        "price", "year", "mileage", "cylinders", "post_id", "scraped_at"
+    ]:
         if column not in prepared.columns:
             prepared[column] = np.nan
 
@@ -140,10 +177,13 @@ def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     prepared["price_num"] = _clean_numeric(prepared["price"])
     prepared["year_num"] = _clean_numeric(prepared["year"])
     prepared["mileage_num"] = _clean_numeric(prepared["mileage"])
+    prepared["cylinders_num"] = _clean_cylinders(prepared["cylinders"])
 
     prepared["make"] = _clean_text(prepared["make"])
     prepared["model"] = _clean_text(prepared["model"])
     prepared["color"] = _clean_text(prepared["color"])
+    prepared["transmission"] = _clean_transmission(prepared["transmission"])
+    prepared["fuel_type"] = _clean_fuel_type(prepared["fuel_type"])
     prepared["city"] = _clean_text(prepared["city"])
     prepared["state"] = _clean_state(prepared["state"])
     prepared["zip_code"] = _clean_zip(prepared["zip_code"])
@@ -155,8 +195,8 @@ def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _build_pipeline() -> tuple[Pipeline, dict, list[str], list[str]]:
-    cat_cols = ["make", "model", "color", "city", "state", "zip_code"]
-    num_cols = ["year_num", "mileage_num", "vehicle_age", "listing_hour", "day_of_week", "month"]
+    cat_cols = ["make", "model", "color", "transmission", "fuel_type", "city", "state", "zip_code"]
+    num_cols = ["year_num", "mileage_num", "cylinders_num", "vehicle_age", "listing_hour", "day_of_week", "month"]
     preprocessor = ColumnTransformer(
         transformers=[
             ("num", SimpleImputer(strategy="median"), num_cols),

@@ -52,6 +52,22 @@ _CACHED_MODEL_OBJ = None
 RUN_ID_ISO_RE = re.compile(r"^\d{8}T\d{6}Z$")
 RUN_ID_PLAIN_RE = re.compile(r"^\d{14}$")
 ZIP_RE = re.compile(r"\b\d{5}(?:-\d{4})?\b")
+FUEL_ALIASES = {
+    "gas": "gas",
+    "gasoline": "gas",
+    "petrol": "gas",
+    "diesel": "diesel",
+    "hybrid": "hybrid",
+    "plug-in hybrid": "plug-in hybrid",
+    "plug in hybrid": "plug-in hybrid",
+    "phev": "plug-in hybrid",
+    "electric": "electric",
+    "ev": "electric",
+    "flex fuel": "flex-fuel",
+    "flex-fuel": "flex-fuel",
+    "e85": "flex-fuel",
+    "cng": "cng",
+}
 
 
 def _if_llm_retryable(exception: Exception) -> bool:
@@ -192,6 +208,38 @@ def _norm_zip(value):
     return match.group(0) if match else normalized
 
 
+def _norm_transmission(value):
+    normalized = _norm_text(value)
+    if not normalized:
+        return None
+    lowered = normalized.lower()
+    if "automatic" in lowered or lowered in {"auto", "a/t"}:
+        return "automatic"
+    if "manual" in lowered or lowered in {"man", "m/t", "stick"}:
+        return "manual"
+    if "cvt" in lowered:
+        return "cvt"
+    return lowered
+
+
+def _norm_cylinders(value):
+    normalized = _norm_text(value)
+    if not normalized:
+        return None
+    match = re.search(r"(\d+)", normalized)
+    if not match:
+        return None
+    return _safe_int(match.group(1))
+
+
+def _norm_fuel_type(value):
+    normalized = _norm_text(value)
+    if not normalized:
+        return None
+    lowered = normalized.lower()
+    return FUEL_ALIASES.get(lowered, lowered)
+
+
 def _vertex_extract_fields(raw_text: str, source_url: str | None = None) -> dict:
     model = _get_vertex_model()
     schema = {
@@ -203,17 +251,26 @@ def _vertex_extract_fields(raw_text: str, source_url: str | None = None) -> dict
             "model": {"type": "string", "nullable": True},
             "mileage": {"type": "integer", "nullable": True},
             "color": {"type": "string", "nullable": True},
+            "transmission": {"type": "string", "nullable": True},
+            "cylinders": {"type": "integer", "nullable": True},
+            "fuel_type": {"type": "string", "nullable": True},
             "city": {"type": "string", "nullable": True},
             "state": {"type": "string", "nullable": True},
             "zip_code": {"type": "string", "nullable": True},
         },
-        "required": ["price", "year", "make", "model", "mileage", "color", "city", "state", "zip_code"],
+        "required": [
+            "price", "year", "make", "model", "mileage", "color",
+            "transmission", "cylinders", "fuel_type", "city", "state", "zip_code"
+        ],
     }
 
     prompt = (
         "Extract ONLY the requested vehicle and location fields from the listing text. "
         "Return strict JSON that conforms to the schema. If a value is missing, return null. "
         "Use integers for price, year, and mileage. For zip_code keep it as a string so leading zeros survive. "
+        "For cylinders use just the cylinder count as an integer when explicit. "
+        "For transmission prefer values like automatic, manual, or cvt. "
+        "For fuel_type prefer values like gas, diesel, hybrid, plug-in hybrid, electric, or flex-fuel. "
         "For state, prefer a 2-letter abbreviation when explicit. Do not invent values.\n\n"
         f"LISTING URL: {source_url or 'unknown'}\n\n"
         f"LISTING TEXT:\n{raw_text[:20000]}"
@@ -251,6 +308,9 @@ def _vertex_extract_fields(raw_text: str, source_url: str | None = None) -> dict
     parsed["make"] = _norm_text(parsed.get("make"))
     parsed["model"] = _norm_text(parsed.get("model"))
     parsed["color"] = _norm_text(parsed.get("color"))
+    parsed["transmission"] = _norm_transmission(parsed.get("transmission"))
+    parsed["cylinders"] = _norm_cylinders(parsed.get("cylinders"))
+    parsed["fuel_type"] = _norm_fuel_type(parsed.get("fuel_type"))
     parsed["city"] = _norm_text(parsed.get("city"))
     parsed["state"] = _norm_state(parsed.get("state"))
     parsed["zip_code"] = _norm_zip(parsed.get("zip_code"))
@@ -293,6 +353,9 @@ def _process_run(run_id: str, max_files: int, overwrite: bool) -> dict:
                 "model": parsed.get("model"),
                 "mileage": parsed.get("mileage"),
                 "color": parsed.get("color"),
+                "transmission": parsed.get("transmission"),
+                "cylinders": parsed.get("cylinders"),
+                "fuel_type": parsed.get("fuel_type"),
                 "city": parsed.get("city"),
                 "state": parsed.get("state"),
                 "zip_code": parsed.get("zip_code"),
